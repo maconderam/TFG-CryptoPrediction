@@ -18,124 +18,124 @@ class Indicator(ABC):
         pass
 
     def info(self):
-            print("-" * 20)
-            print(f"Indicator: {self.name}")
+        print("-" * 20)
+        print(f"Indicator: {self.name}")
 
-            print("Variables:")
-            for k, v in self.variables.items():
-                print(f"  {k}: {v}")
+        print("Variables:")
+        for k, v in self.variables.items():
+            print(f"  {k}: {v}")
 
-            if self.result is None:
-                print("Result: not computed yet")
-                return
+        if self.result is None:
+            print("Result: not computed yet")
+            return
 
-            # Stats
-            if self.stats is None:
-                self.calculate_stats()
-            else:
-                print("Statistics:")
-                for col, stats in self.stats.items():
-                    print(f"  {col}:")
-                    for k, v in stats.items():
-                        print(f"    {k}: {v:.6f}" if isinstance(v, float) else f"    {k}: {v}")
+        # Stats
+        if self.stats is not None:
+            print("Statistics:")
+            for col, stats in self.stats.items():
+                print(f"  {col}:")
+                for k, v in stats.items():
+                    print(f"    {k}: {v:.6f}" if isinstance(v, float) else f"    {k}: {v}")
+        else:
+            self.calculate_stats()
 
-            # Entropy
-            if self.entropy is None:
-                self.calculate_entropy()
-            else:
-                print("Entropy:")
-                for col, value in self.entropy.items():
-                    if np.isnan(value):
-                        print(f"  {col}: nan")
-                    else:
-                        print(f"  {col}: {value:.6f}")
-
-    def get_data(self):
-        return self.data
-
-    def get_result(self):
-        return self.result
-
-    def calculate_entropy(self):
-            if self.result is None:
-                raise ValueError("You must run compute() first")
-
-            entropies = {}
-
-            for col in self.result.columns:
-
-                x = self.result[col].values
-                x = x[~np.isnan(x)]
-
-                n = len(x)
-
-                if n == 0:
-                    entropies[col] = np.nan
-                    continue
-
-                if n > 10000:
-                    bins = 20
-                elif n > 1000:
-                    bins = 10
-                elif n > 100:
-                    bins = 5
-                else:
-                    bins = 3
-
-                hist, _ = np.histogram(x, bins=bins, density=True)
-                hist = hist[hist > 0]
-
-                h = entropy(hist)
-                max_entropy = np.log(bins)
-
-                entropies[col] = h / max_entropy
-
-            self.entropy = entropies
-
+        # Entropy
+        if self.entropy is not None:
             print("Entropy:")
-            for col, value in entropies.items():
+            for col, value in self.entropy.items():
                 if np.isnan(value):
                     print(f"  {col}: nan")
                 else:
                     print(f"  {col}: {value:.6f}")
+        else:
+            self.calculate_entropy()
 
-            return self.entropy
+    def get_data(self) -> pd.DataFrame:
+        return self.data
 
-    def calculate_stats(self):
-            if self.result is None:
-                raise ValueError("You must run compute() first")
+    def get_result(self) -> pd.DataFrame:
+        return self.result
 
-            all_stats = {}
+    def calculate_entropy(self) -> dict:
+        if self.result is None:
+            raise ValueError("You must run compute() first")
 
-            for col in self.result.columns:
+        entropies = {}
 
-                x = self.result[col].values
-                x = x[~np.isnan(x)]
+        for col in self.result.columns:
 
-                if len(x) == 0:
-                    continue
+            x = self.result[col].values
+            x = x[~np.isnan(x)]
 
-                stats = {
-                    "n": len(x),
-                    "mean": np.mean(x),
-                    "std": np.std(x),
-                    "min": np.min(x),
-                    "max": np.max(x),
-                    "range": np.max(x) - np.min(x),
-                    "iqr": np.percentile(x, 75) - np.percentile(x, 25),
-                }
+            n = len(x)
 
-                all_stats[col] = stats
+            if n == 0:
+                entropies[col] = np.nan
+                continue
 
-            self.stats = all_stats
+            if n > 10000:
+                bins = 20
+            elif n > 1000:
+                bins = 10
+            elif n > 100:
+                bins = 5
+            else:
+                bins = 3
 
-            print("Statistics:")
-            for col, stats in all_stats.items():
-                print(f"  {col}:")
-                for k, v in stats.items():
-                    print(f"    {k}: {v:.6f}" if isinstance(v, float) else f"    {k}: {v}")
+            hist, _ = np.histogram(x, bins=bins, density=True)
+            hist = hist[hist > 0]
 
-            return self.stats
+            h = entropy(hist)
+            max_entropy = np.log(bins)
+
+            entropies[col] = h / max_entropy
+
+        self.entropy = entropies
+
+        print("Entropy:")
+        for col, value in entropies.items():
+            if np.isnan(value):
+                print(f"  {col}: nan")
+            else:
+                print(f"  {col}: {value:.6f}")
+
+        return self.entropy
+
+    def calculate_stats(self) -> dict:
+        if self.result is None:
+            raise ValueError("You must run compute() first")
+
+        all_stats = {}
+
+        for col in self.result.columns:
+
+            x = self.result[col].values
+            x = x[~np.isnan(x)]
+
+            if len(x) == 0:
+                continue
+
+            stats = {
+                "n": len(x),
+                "mean": np.mean(x),
+                "std": np.std(x),
+                "min": np.min(x),
+                "max": np.max(x),
+                "range": np.max(x) - np.min(x),
+                "iqr": np.percentile(x, 75) - np.percentile(x, 25),
+            }
+
+            all_stats[col] = stats
+
+        self.stats = all_stats
+
+        print("Statistics:")
+        for col, stats in all_stats.items():
+            print(f"  {col}:")
+            for k, v in stats.items():
+                print(f"    {k}: {v:.6f}" if isinstance(v, float) else f"    {k}: {v}")
+
+        return self.stats
 
 class RSI(Indicator):
     def __init__(self, data, window=30, smooth_window=3):
@@ -158,7 +158,7 @@ class RSI(Indicator):
         )
 
         self.result = pd.DataFrame(
-            {f"rsi_{self.window}": rsi},
+            {f"rsi_{self.window}_{self.smooth_window}": rsi},
             index=self.data.index
         )
 
@@ -194,8 +194,8 @@ class Stochastic(Indicator):
 
         self.result = pd.DataFrame(
             {
-                f"%K_{self.window}": k,
-                f"%D_{self.window}": d
+                f"%K_{self.window}_{self.smooth_window}": k,
+                f"%D_{self.window}_{self.smooth_window}": d
             },
             index=self.data.index
         )
@@ -230,8 +230,8 @@ class StochasticRSI(Indicator):
 
         self.result = pd.DataFrame(
             {
-                f"rsi_%K_{self.rsi_window}_{self.stoch_window}": k,
-                f"rsi_%D_{self.rsi_window}_{self.stoch_window}": d
+                f"rsi_%K_{self.rsi_window}_{self.stoch_window}_{self.smooth_window}": k,
+                f"rsi_%D_{self.rsi_window}_{self.stoch_window}_{self.smooth_window}": d
             },
             index=self.data.index
         )
@@ -268,9 +268,9 @@ class MACD(Indicator):
 
         self.result = pd.DataFrame(
             {
-                f"macd_{self.long_window}_{self.short_window}": macd,
-                f"macd_signal_{self.long_window}_{self.short_window}": signal,
-                f"macd_hist_{self.long_window}_{self.short_window}": hist
+                f"macd_{self.long_window}_{self.short_window}_{self.smooth_window}": macd,
+                f"macd_signal_{self.long_window}_{self.short_window}_{self.smooth_window}": signal,
+                f"macd_hist_{self.long_window}_{self.short_window}_{self.smooth_window}": hist
             },
             index=self.data.index
         )

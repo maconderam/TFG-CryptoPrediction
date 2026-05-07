@@ -12,7 +12,7 @@ class ThresholdEvaluator:
         self.optimized_threshold = {}
 
     @staticmethod
-    def _pf(win, loss):
+    def _pf(win, loss) -> float:
         if loss == 0:
             return np.inf
         return win / loss
@@ -33,6 +33,15 @@ class ThresholdEvaluator:
             f"{fmt(lw_long):>10} | "
             f"{fmt(lw_short):>10}"
         )
+
+    def _check_prepared(self):
+        if not hasattr(self, "work_signal") or not hasattr(self, "work_return"):
+            raise RuntimeError("Call prepare() before find_optimized_threshold()")
+
+    def _align(self, signal):
+        """Align a signal Series with self.returns, return (signal_arr, returns_arr)."""
+        mask = signal.notna() & self.returns.notna()
+        return signal[mask].to_numpy(), self.returns[mask].to_numpy()
 
     def get_work_returns(self):
         try:
@@ -65,13 +74,31 @@ class ThresholdEvaluator:
             raise ValueError("No valid observations")
 
         return self
+    
+    def evaluate_threshold(self, signal, threshold):
+        signal, returns = self._align(signal)
 
-    def threshold_evaluation(self, signal):
-        returns = self.returns
+        mask_above = signal >= threshold
+        mask_below = ~mask_above
 
-        mask = signal.notna() & returns.notna()
-        signal = signal[mask].to_numpy()
-        returns = returns[mask].to_numpy()
+        r_above = returns[mask_above]
+        r_below = returns[mask_below]
+
+        win_above = r_above[r_above > 0].sum()
+        lose_above = -r_above[r_above < 0].sum()
+
+        win_below = r_below[r_below > 0].sum()
+        lose_below = -r_below[r_below < 0].sum()
+
+        return {
+            "pf_long_above": self._pf(win_above, lose_above),
+            "pf_short_above": self._pf(lose_above, win_above),
+            "pf_long_below": self._pf(win_below, lose_below),
+            "pf_short_below": self._pf(lose_below, win_below)
+        }
+
+    def evaluate_all_thresholds(self, signal):
+        signal, returns = self._align(signal)
 
         thresholds = np.quantile(signal, self.fracs)
         nbin = 0
@@ -100,7 +127,8 @@ class ThresholdEvaluator:
                                   )
             nbin += 1
 
-    def find_optimized_threshold(self, min_kept=300):
+    def find_optimized_threshold(self, min_kept=300) -> dict:
+        self._check_prepared()
         n = self.n
         work_signal = self.work_signal
         work_return = self.work_return

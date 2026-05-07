@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+
 from .thresholds import ThresholdEvaluator
 
 class MonteCarloPT:
@@ -11,10 +12,10 @@ class MonteCarloPT:
         self.work_return = None
         self.rng = np.random.default_rng(seed)
 
-    def _score(self, result: dict):
+    def _score(self, result: dict) -> float:
         return max(result["pf_high"], result["pf_low"])
 
-    def mcpt_threshold(self, signal, n_test=100, flip_sign=False):
+    def mcpt_threshold(self, signal, n_test=100, flip_sign=False) -> dict:
         self.signal_name = signal.name
         self.work_return = self.te.prepare(signal, flip_sign=flip_sign).get_work_returns()
 
@@ -55,6 +56,7 @@ class MonteCarloPT:
         }
 
         self.summary()
+        return self.results_mc
 
     # ---------------------------------------------------------
     def summary(self):

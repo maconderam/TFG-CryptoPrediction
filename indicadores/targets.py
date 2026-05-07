@@ -28,47 +28,35 @@ class Target(ABC):
         if self.result is None:
             print("Result: not computed yet")
             return
-
+        
         # Stats
-        if self.stats is None:
-            self.calculate_stats()
-        else:
+        if self.stats is not None:
             print("Statistics:")
             for col, stats in self.stats.items():
                 print(f"  {col}:")
                 for k, v in stats.items():
                     print(f"    {k}: {v:.6f}" if isinstance(v, float) else f"    {k}: {v}")
+        else:
+            self.calculate_stats()
 
         # Entropy
-        if self.entropy is None:
-            self.calculate_entropy()
-        else:
+        if self.entropy is not None:
             print("Entropy:")
             for col, value in self.entropy.items():
                 if np.isnan(value):
                     print(f"  {col}: nan")
                 else:
                     print(f"  {col}: {value:.6f}")
-
-        # Entropy
-        if self.entropy is None:
+        else:
             self.calculate_entropy()
 
-        else:
-            print("Entropy:")
-            for target, value in self.entropy.items():
-                if np.isnan(value):
-                    print(f"  {target}: nan")
-                else:
-                    print(f"  {target}: {value:.6f}")
-
-    def get_data(self):
+    def get_data(self) -> pd.DataFrame:
         return self.data
 
-    def get_result(self):
+    def get_result(self) -> pd.DataFrame:
         return self.result
 
-    def calculate_entropy(self):
+    def calculate_entropy(self) -> dict:
         if self.result is None:
             raise ValueError("You must run compute() first")
 
@@ -111,7 +99,7 @@ class Target(ABC):
 
         return self.entropy
 
-    def calculate_stats(self):
+    def calculate_stats(self) -> dict:
         if self.result is None:
             raise ValueError("You must run compute() first")
 
