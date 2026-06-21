@@ -8,13 +8,6 @@ from .mcpt import MonteCarloPT
 
 
 class WalkForwardEvaluator:
-    """
-    Evaluador de estrategias de trading utilizando validación cruzada Walk-Forward.
-
-    Permite evaluar la robustez de modelos predictivos o indicadores técnicos a lo
-    largo del tiempo mediante ventanas temporales deslizantes (rolling) o expansivas.
-    """
-
     def __init__(self,
                  data: pd.DataFrame,
                  train_window: int,
@@ -33,8 +26,6 @@ class WalkForwardEvaluator:
         self.splits = self._build_splits()
 
         self.returns = np.log(self.data["close"].shift(-1) / self.data["close"])
-        
-        # Inicialización de ThresholdEvaluator para la gestión de umbrales óptimos
         self.te = ThresholdEvaluator(self.returns)
 
     def _build_splits(self):
@@ -62,30 +53,14 @@ class WalkForwardEvaluator:
                   min_kept: int = 300,
                   seed: int = 42):
         """
-        Ejecuta el análisis Walk-Forward entrenando y evaluando un modelo predictivo.
-
-        Itera sobre cada fold temporal, entrena el modelo en la ventana de training,
-        optimiza los umbrales de decisión y evalúa los resultados en la ventana de testing,
-        con la opción de aplicar pruebas de permutación de Monte Carlo (MCPT) para validación.
-
-        Args:
-            model (Model): Instancia del modelo que implementa los métodos fit y predict.
-            features (list): Lista con los nombres de las columnas de características (X).
-            target (str): Nombre de la columna objetivo (y).
-            mcpt (bool, optional): Indica si se activa el test de Monte Carlo por fold. Defaults to False.
-            mcpt_mode (str, optional): "signal" para permutar predicciones de train o
-                "retrain" para permutar y_train y reentrenar. Defaults to "signal".
-            n_mcpt (int, optional): Número de permutaciones para el test MCPT. Defaults to 200.
-            min_kept (int, optional): Cantidad mínima de muestras requeridas tras aplicar el umbral. Defaults to 300.
-            seed (int, optional): Semilla para la generación de aleatoriedad. Defaults to 42.
-
-        Returns:
-            tuple: Contiene una lista de diccionarios con las métricas detalladas de cada fold
-                y un pd.DataFrame con las predicciones fuera de muestra acumuladas.
-
-        Raises:
-            TypeError: Si el modelo no hereda o no es una instancia de la clase Model.
-            ValueError: Si mcpt_mode no es una de las opciones válidas ('signal' o 'retrain').
+        Parameters
+        ----------
+        mcpt      : activa el test de Monte Carlo por fold
+        mcpt_mode : "signal"  -> permuta las predicciones de train (rapido,
+                                  testea si el umbral es robusto)
+                    "retrain" -> permuta y_train y reentrena el modelo en
+                                 cada permutacion (lento, testea si la
+                                 relacion X->y es real)
         """
         if not isinstance(model, Model):
             raise TypeError("model must be an instance of Model")
@@ -109,24 +84,19 @@ class WalkForwardEvaluator:
             y_test  = y.iloc[test_start:test_end]
 
             current_model = copy.deepcopy(model)
-            # Llamada al objeto Model: Entrenamiento con los datos de la ventana actual
             current_model.fit(X_train, y_train)
 
-            # Llamada al objeto Model: Generación de predicciones sobre el conjunto de entrenamiento
             y_pred_train = pd.Series(
                 current_model.predict(X_train),
                 index=X_train.index,
                 name="y_pred_train"
             )
-            # Llamada al objeto ThresholdEvaluator: Preparación de retornos asociados a las predicciones de train
             self.te.prepare(y_pred_train)
-            # Llamada al objeto ThresholdEvaluator: Búsqueda de umbrales óptimos basados en Profit Factor
             opt = self.te.find_optimized_threshold(min_kept=min_kept)
 
             p_value_high = None
             p_value_low  = None
             if mcpt:
-                # Inicialización del objeto MonteCarloPT para evaluar la significancia estadística del fold
                 _mc = MonteCarloPT(
                     self.data.iloc[train_start:train_end].reset_index(drop=True),
                     seed=seed
@@ -135,7 +105,6 @@ class WalkForwardEvaluator:
                 if mcpt_mode == "signal":
                     pred_fold = y_pred_train.reset_index(drop=True).rename(y_pred_train.name)
 
-                    # Llamada al objeto MonteCarloPT: Test de permutación rápido sobre las señales fijas
                     res_high = _mc.mcpt_threshold(pred_fold, n_test=n_mcpt, min_kept=min_kept, verbose=False)
                     res_low  = _mc.mcpt_threshold(pred_fold, n_test=n_mcpt, min_kept=min_kept, flip_sign=True, verbose=False)
 
@@ -143,7 +112,6 @@ class WalkForwardEvaluator:
                     X_train_reset = X_train.reset_index(drop=True)
                     y_train_reset = y_train.reset_index(drop=True)
 
-                    # Llamada al objeto MonteCarloPT: Test exhaustivo que reentrena el objeto Model por permutación
                     res_high = _mc.mcpt_model(current_model, X_train_reset, y_train_reset,
                                                n_test=n_mcpt, min_kept=min_kept, verbose=False)
                     res_low  = _mc.mcpt_model(current_model, X_train_reset, y_train_reset,
@@ -152,13 +120,11 @@ class WalkForwardEvaluator:
                 p_value_high = res_high["p_value"]
                 p_value_low  = res_low["p_value"]
 
-            # Llamada al objeto Model: Predicción fuera de muestra en la ventana de test
             y_pred_test = pd.Series(
                 current_model.predict(X_test),
                 index=X_test.index,
                 name="y_pred_test"
             )
-            # Llamada al objeto ThresholdEvaluator: Evaluación del rendimiento real usando los umbrales optimizados de train
             eval_high = self.te.evaluate_threshold(y_pred_test, opt["high_thresh"])
             eval_low  = self.te.evaluate_threshold(y_pred_test, opt["low_thresh"])
 
@@ -195,6 +161,8 @@ class WalkForwardEvaluator:
                     "y_pred": y_pred,
                 })
 
+        fold_results = self._add_composite_score(fold_results)
+
         self.fold_results        = fold_results
         self.fold_results_source = "model"
         self.predictions_df      = pd.DataFrame(all_predictions).set_index("index")
@@ -203,22 +171,6 @@ class WalkForwardEvaluator:
 
     def run_indicator(self, signal: pd.Series, mcpt: bool = False, n_mcpt: int = 200,
                        min_kept: int = 300, seed: int = 42):
-        """
-        Ejecuta el análisis Walk-Forward directamente sobre un indicador o señal precalculada.
-
-        A diferencia de `run_model`, este método prescinde de la etapa de ajuste de un modelo
-        y optimiza/evalúa los umbrales directamente sobre la serie temporal de la señal provista.
-
-        Args:
-            signal (pd.Series): Serie temporal del indicador o señal numérica a evaluar.
-            mcpt (bool, optional): Indica si se activa la validación de Monte Carlo por fold. Defaults to False.
-            n_mcpt (int, optional): Número de permutaciones para el test MCPT. Defaults to 200.
-            min_kept (int, optional): Muestras mínimas retenidas tras la aplicación de umbrales. Defaults to 300.
-            seed (int, optional): Semilla para garantizar reproducibilidad en las permutaciones. Defaults to 42.
-
-        Returns:
-            list: Lista de diccionarios que recopila las métricas obtenidas en cada fold temporal.
-        """
         self._indicator_signal = signal.name or "signal"
         fold_results = []
 
@@ -227,29 +179,24 @@ class WalkForwardEvaluator:
             signal_train = signal.iloc[train_start:train_end]
             signal_test  = signal.iloc[test_start:test_end]
 
-            # Llamada al objeto ThresholdEvaluator: Asignación de retornos para la señal de train actual
             self.te.prepare(signal_train)
-            # Llamada al objeto ThresholdEvaluator: Optimización de límites superiores e inferiores
             opt = self.te.find_optimized_threshold(min_kept=min_kept)
 
             p_value_high = None
             p_value_low  = None
             if mcpt:
-                # Inicialización del objeto MonteCarloPT para la prueba sobre indicadores
                 _mc = MonteCarloPT(
                     self.data.iloc[train_start:train_end].reset_index(drop=True),
                     seed=seed
                 )
                 signal_fold = signal_train.reset_index(drop=True).rename(signal_train.name)
 
-                # Llamada al objeto MonteCarloPT: Test de permutación directo sobre los valores de la señal
                 res_high = _mc.mcpt_threshold(signal_fold, n_test=n_mcpt, verbose=False)
                 res_low  = _mc.mcpt_threshold(signal_fold, n_test=n_mcpt, flip_sign=True, verbose=False)
 
                 p_value_high = res_high["p_value"]
                 p_value_low  = res_low["p_value"]
 
-            # Llamada al objeto ThresholdEvaluator: Evaluación de la señal fuera de muestra usando los límites óptimos
             eval_high = self.te.evaluate_threshold(signal_test, opt["high_thresh"])
             eval_low  = self.te.evaluate_threshold(signal_test, opt["low_thresh"])
 
@@ -284,21 +231,58 @@ class WalkForwardEvaluator:
                   f"L.blw: {eval_low['pf_long_below']:.3f}"
                   + (f" | p_hi: {p_value_high:.3f} | p_lo: {p_value_low:.3f}" if mcpt else ""))
 
+        fold_results = self._add_composite_score(fold_results)
+
         self.fold_results        = fold_results
         self.fold_results_source = "indicator"
         return fold_results
 
+    def _add_composite_score(self, fold_results: list) -> list:
+        """Calcula un composite_score por fold combinando PF test y p-value.
+
+        Usa el mismo criterio que IndicatorSelector: normaliza pf_test_long_above
+        (cuanto más alto mejor) y p_value_high (cuanto más bajo mejor) entre
+        0 y 1 a lo largo de todos los folds, y combina ambos con pesos
+        0.6 (PF) y 0.4 (p-value). Si no hay MCPT activado, el composite_score
+        se basa únicamente en el PF normalizado.
+
+        Args:
+            fold_results: Lista de dicts con los resultados de cada fold.
+
+        Returns:
+            La misma lista, con la clave "composite_score" añadida a cada dict.
+        """
+        if not fold_results:
+            return fold_results
+
+        df = pd.DataFrame(fold_results)
+        pf_col = "pf_test_long_above"
+
+        pf_values = df[pf_col].replace([np.inf, -np.inf], np.nan)
+        pf_min, pf_max = pf_values.min(), pf_values.max()
+        pf_range = pf_max - pf_min if pf_max != pf_min else 1.0
+        pf_norm = (pf_values - pf_min) / pf_range
+
+        has_mcpt = "p_value_high" in df.columns
+
+        if has_mcpt:
+            pv_values = df["p_value_high"]
+            pv_min, pv_max = pv_values.min(), pv_values.max()
+            pv_range = pv_max - pv_min if pv_max != pv_min else 1.0
+            pv_norm = 1 - (pv_values - pv_min) / pv_range  # invertido: p bajo = mejor
+
+            composite = 0.6 * pf_norm + 0.4 * pv_norm
+        else:
+            composite = pf_norm
+
+        composite = composite.fillna(0.0)
+
+        for row, score in zip(fold_results, composite):
+            row["composite_score"] = float(score)
+
+        return fold_results
+
     def summary(self):
-        """
-        Calcula y muestra en consola un reporte consolidado del rendimiento Walk-Forward.
-
-        Agrega las métricas de todos los folds (medias de Profit Factor, tasas de degradación
-        e indicadores de significancia estadística) proporcionando una visión global
-        de la robustez de la estrategia analizada.
-
-        Raises:
-            RuntimeError: Si se intenta ejecutar sin haber corrido previamente `run_model` o `run_indicator`.
-        """
         if not hasattr(self, "fold_results"):
             raise RuntimeError("Call run_model() or run_indicator() first")
 
@@ -320,7 +304,7 @@ class WalkForwardEvaluator:
 
         print("\n--- Datos ---")
         if source == "model":
-            print(f"  Target:    {self.target}")
+            print(f"  Target:   {self.target}")
             print(f"  Features: {', '.join(self.features)}")
             print("\n--- Modelo ---")
             print(f"  {self.fold_results[0]['model'].name}")

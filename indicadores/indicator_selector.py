@@ -12,7 +12,7 @@ from .indicators import (
     RSI, Stochastic, StochasticRSI, MACD, PriceIntensity,
     ADX, Aroon, AroonOscillator, ATR, PriceChangeOscillator,
     PriceVarianceRatio, ChangeVarianceRatio, CMMA, MADifference,
-    IntradayIntensity, ChaikinMoneyFlow,
+    IntradayIntensity, ChaikinMoneyFlow, OBV
 )
 from evaluacion.mcpt import MonteCarloPT
 
@@ -20,23 +20,72 @@ from evaluacion.mcpt import MonteCarloPT
 # Grillas de parámetros por defecto para cada clase de indicador
 # ---------------------------------------------------------------------------
 DEFAULT_GRIDS = {
-    "RSI": {"window": [7, 10, 14, 20, 30, 50], "smooth_window": [2, 3, 5]},
-    "Stochastic": {"window": [7, 10, 14, 20, 30, 50], "smooth_window": [2, 3, 5]},
-    "StochasticRSI": {"rsi_window": [10, 14, 20, 30], "stoch_window": [3, 5, 10], "smooth_window": [2, 3]},
-    "MACD": {"short_length": [8, 12, 16], "long_length": [20, 26, 35, 50], "smooth_window": [9]},
-    "PriceIntensity": {"smooth_window": [5, 10, 14, 20, 30, 50]},
-    "ADX": {"window": [7, 10, 14, 20, 30, 50]},
-    "Aroon": {"window": [10, 14, 20, 30, 50, 100]},
-    "AroonOscillator": {"window": [10, 14, 20, 30, 50, 100]},
-    "PriceChangeOscillator": {"short_length": [5, 10, 20], "mult": [2, 3, 5]},
-    "PriceVarianceRatio": {"short_length": [5, 10, 20], "mult": [2, 4, 6]},
-    "ChangeVarianceRatio": {"short_length": [5, 10, 20], "mult": [2, 4, 6]},
-    "CMMA": {"window": [5, 10, 20, 50], "atr_window": [14, 60, 252], "c": [1.0]},
-    "MADifference": {"short_length": [5, 10, 20], "long_length": [50, 100, 150], "lag": [0]},
-    "IntradayIntensity": {"window": [7, 14, 21, 30], "smooth_window": [1, 5, 10]},
-    "ChaikinMoneyFlow": {"window": [7, 10, 14, 21, 30, 50]},
+    "RSI": {
+        "window":        [7, 10, 14, 20, 30, 50],
+        "smooth_window": [2, 3, 5],
+    },
+    "Stochastic": {
+        "window":        [7, 10, 14, 20, 30, 50],
+        "smooth_window": [2, 3, 5],
+    },
+    "StochasticRSI": {
+        "rsi_window":    [10, 14, 20, 30],
+        "stoch_window":  [3, 5, 10],
+        "smooth_window": [2, 3],
+    },
+    "MACD": {
+        "short_length":  [8, 12, 16],
+        "long_length":   [20, 26, 35, 50],
+        "smooth_window": [9],
+    },
+    "PriceIntensity": {
+        "smooth_window": [5, 10, 14, 20, 30, 50],
+    },
+    "ADX": {
+        "window": [7, 10, 14, 20, 30, 50],
+    },
+    "Aroon": {
+        "window": [10, 14, 20, 30, 50, 100],
+    },
+    "AroonOscillator": {
+        "window": [10, 14, 20, 30, 50, 100],
+    },
+    "PriceChangeOscillator": {
+        "short_length": [5, 10, 20],
+        "mult":         [2, 3, 5],
+    },
+    "PriceVarianceRatio": {
+        "short_length": [5, 10, 20],
+        "mult":         [2, 4, 6],
+    },
+    "ChangeVarianceRatio": {
+        "short_length": [5, 10, 20],
+        "mult":         [2, 4, 6],
+    },
+    "CMMA": {
+        "window":     [5, 10, 20, 50],
+        "atr_window": [14, 60, 252],
+        "c":          [1.0],
+    },
+    "MADifference": {
+        "short_length": [5, 10, 20],
+        "long_length":  [50, 100, 150],
+        "lag":          [0],
+    },
+    "IntradayIntensity": {
+        "window":        [7, 14, 21, 30],
+        "smooth_window": [1, 5, 10],
+    },
+    "ChaikinMoneyFlow": {
+        "window": [7, 10, 14, 21, 30, 50],
+    },
+    "OBV": {
+        "window":     [5, 10, 14, 20, 30],
+        "atr_window": [14, 30],
+    },
 }
-
+ 
+# Map name → class
 _INDICATOR_CLASSES = {
     "RSI": RSI, "Stochastic": Stochastic, "StochasticRSI": StochasticRSI,
     "MACD": MACD, "PriceIntensity": PriceIntensity, "ADX": ADX,
@@ -44,7 +93,7 @@ _INDICATOR_CLASSES = {
     "PriceChangeOscillator": PriceChangeOscillator, "PriceVarianceRatio": PriceVarianceRatio,
     "ChangeVarianceRatio": ChangeVarianceRatio, "CMMA": CMMA,
     "MADifference": MADifference, "IntradayIntensity": IntradayIntensity,
-    "ChaikinMoneyFlow": ChaikinMoneyFlow,
+    "ChaikinMoneyFlow": ChaikinMoneyFlow, "OBV": OBV,
 }
 
 class IndicatorSelector:

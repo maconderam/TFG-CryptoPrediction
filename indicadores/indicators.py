@@ -685,6 +685,43 @@ class CMMA(Indicator):
 # Volume Indicators
 # ------------------------------------------------------------------
 
+class OBV(Indicator):
+    """On-Balance Volume (OBV) normalizado por su tasa de cambio relativa a la volatilidad.
+
+    En lugar de usar el nivel acumulado del OBV (que no tiene un significado
+    absoluto, similar al precio), mide su velocidad de variación en una
+    ventana y la normaliza por el ATR para hacerla comparable entre activos
+    y períodos de distinta volatilidad.
+    """
+
+    def __init__(self, data: pd.DataFrame, window: int = 14, atr_window: int = 14):
+        super().__init__(
+            data,
+            name="OBV",
+            variables={"window": window, "atr_window": atr_window}
+        )
+        self.window     = window
+        self.atr_window = atr_window
+
+    def compute(self) -> pd.DataFrame:
+        close  = self.data["close"]
+        volume = self.data["volume"]
+
+        # Acumula el volumen sumando si el cierre sube y restando si baja
+        obv = talib.OBV(close, volume)
+
+        # Volatilidad de referencia para normalizar la escala del cambio de OBV
+        atr_vals = ATR(self.data, window=self.atr_window).compute()[f"atr_{self.atr_window}"]
+
+        # Tasa de cambio del OBV sobre la ventana, escalada por la raíz del tiempo
+        obv_roc = (obv - obv.shift(self.window)) / (atr_vals * np.sqrt(self.window) + 1e-12)
+
+        self.result = pd.DataFrame(
+            {f"obv_roc_{self.window}_{self.atr_window}": obv_roc},
+            index=self.data.index
+        )
+        return self.result
+
 class IntradayIntensity(Indicator):
     """Intraday Intensity (II) ponderada por volumen y suavizada mediante medias móviles."""
 
