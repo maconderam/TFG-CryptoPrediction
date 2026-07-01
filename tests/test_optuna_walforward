@@ -1,15 +1,21 @@
+import sys
+from pathlib import Path
+
+# Añade la raíz del proyecto al sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Lasso
 
-from modelos.models import SklearnModel
-from modelos.model_optimizer import ModelOptimizer
-from evaluacion.optuna_walkforward import OptunaWalkForward
-from evaluacion.visualizador import VisualizerWalkForward
+from src.models.models import SklearnModel
+from src.models.model_optimizer import ModelOptimizer
+from src.evaluation.optuna_walkforward import OptunaWalkForward
+from src.evaluation.visualizer_walkforward import VisualizerWalkForward
 # ------------------------------------------------------------------
 # 1. Carga de datos
 # ------------------------------------------------------------------
-path = "datos/procesados/BTCUSDT_1d_01-01-2016_18-01-2026.csv"
+path = "data/processed/BTCUSDT_1d_01-01-2016_18-01-2026.csv"
 df = pd.read_csv(path, index_col=0)
 df = df.dropna()
 

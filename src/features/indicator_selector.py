@@ -12,7 +12,7 @@ from .indicators import (
     PriceVarianceRatio, ChangeVarianceRatio, CMMA, MADifference,
     IntradayIntensity, ChaikinMoneyFlow, OBV,
 )
-from src.evaluacion.mcpt import MonteCarloPT
+from src.evaluation.mcpt import MonteCarloPT
 
 # ---------------------------------------------------------------------------
 # Default parameter grids for each indicator class

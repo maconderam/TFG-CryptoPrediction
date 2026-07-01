@@ -1,9 +1,15 @@
-from src.eda.indicadores.indicator_selector import IndicatorSelector
+import sys
+from pathlib import Path
+
+# Añade la raíz del proyecto al sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from src.features.indicator_selector import IndicatorSelector
 from src.eda.eda import prepare_data
 import pandas as pd
 import matplotlib.pyplot as plt
 
-path = "datos/crudo/1d/BTCUSDT_1d_01-01-2016_18-01-2026.csv"
+path = "data/raw/1d/BTCUSDT_1d_01-01-2016_18-01-2026.csv"
 
 df = pd.read_csv(path, sep=",")
 df = prepare_data(df)

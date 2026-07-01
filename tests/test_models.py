@@ -6,13 +6,13 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
  
-from src.modelos.models import SklearnModel
+from src.models.models import SklearnModel
 from src.eda.eda import prepare_data
-from src.evaluacion.visualizador import VisualizerWalkForward
-from src.evaluacion.walkforward import WalkForwardEvaluator
-from src.evaluacion.feature_analyzer import FeatureAnalyzer
-from src.eda.indicadores.indicators import RSI, Stochastic, StochasticRSI, MACD, PriceIntensity
-from src.eda.indicadores.targets import NormalizedFutureReturn  
+from src.evaluation.visualizer_walkforward import VisualizerWalkForward
+from src.evaluation.walkforward import WalkForwardEvaluator
+from src.evaluation.feature_analyzer import FeatureAnalyzer
+from src.features.indicators import RSI, Stochastic, StochasticRSI, MACD, PriceIntensity
+from src.features.targets import NormalizedFutureReturn  
  
 # ------------------------------------------------------------------
 # 1. Carga y limpieza

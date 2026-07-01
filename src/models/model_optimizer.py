@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 import optuna
 
-from src.modelos.models import Model
-from src.evaluacion.walkforward import WalkForwardEvaluator
+from src.models.models import Model
+from src.evaluation.walkforward import WalkForwardEvaluator
 
 
 class ModelOptimizer:

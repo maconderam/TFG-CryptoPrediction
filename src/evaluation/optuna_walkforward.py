@@ -4,7 +4,7 @@ import pandas as pd
 import optuna
 from optuna.logging import set_verbosity, WARNING
 
-from src.modelos.models import Model
+from src.models.models import Model
 from .thresholds import ThresholdEvaluator
 from .mcpt import MonteCarloPT
 

@@ -1,10 +1,3 @@
-"""
-Test exploratorio: compara la version cruda (normalize=False) frente a la
-normalizada (normalize=True) de cada indicador donde ese parametro tiene
-efecto real, mostrando su entropy y stats (con graficas).
-
-No guarda nada a CSV, es solo para inspeccion visual.
-"""
 import sys
 from pathlib import Path
 
@@ -29,10 +22,10 @@ df   = prepare_data(df)
 # no afecta a su calculo.
 # ------------------------------------------------------------------
 NORMALIZABLE = {
-    "MACD":                  (MACD,                  dict(short_length=12, long_length=26)),
-    "PriceIntensity":        (PriceIntensity,        dict(smooth_window=20)),
-    "PriceChangeOscillator": (PriceChangeOscillator, dict(short_length=10, mult=5)),
-    "CMMA":                  (CMMA,                  dict(window=10, atr_window=14)),
+    #"MACD":                  (MACD,                  dict(short_length=12, long_length=26)),
+    #"PriceIntensity":        (PriceIntensity,        dict(smooth_window=20)),
+    #"PriceChangeOscillator": (PriceChangeOscillator, dict(short_length=10, mult=5)),
+    #"CMMA":                  (CMMA,                  dict(window=10, atr_window=14)),
     "MADifference":          (MADifference,          dict(short_length=10, long_length=50)),
     "PriceVarianceRatio":    (PriceVarianceRatio,    dict(short_length=10, mult=4)),
     "ChangeVarianceRatio":   (ChangeVarianceRatio,   dict(short_length=10, mult=4)),
@@ -55,5 +48,3 @@ for name, (cls, kwargs) in NORMALIZABLE.items():
     ind_norm.compute()
     ind_norm.calculate_entropy()
     ind_norm.calculate_stats()
-
-print("\nComparacion completada (no se ha guardado ningun CSV).")

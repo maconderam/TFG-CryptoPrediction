@@ -290,8 +290,81 @@ class Indicator(ABC):
             print(f"  {col}:")
             for k, v in stats.items():
                 print(f"    {k}: {v:.6f}" if isinstance(v, float) else f"    {k}: {v}")
-
+        
+        self._plot_signal_vs_price()
+        
         return self.stats
+    
+    def _plot_signal_vs_price(self):
+            """Genera y muestra una figura con dos subplots sincronizados:
+            - Arriba: precio close a lo largo del tiempo.
+            - Abajo: señal del indicador a lo largo del tiempo (una línea por columna).
+
+            Útil para comparar visualmente cómo de estacionaria es la señal y
+            detectar si varía de forma razonable a lo largo del tiempo o si
+            presenta derivas, cambios de escala o comportamientos no estacionarios.
+            """
+            if "close" not in self.data.columns:
+                return
+                
+            # Validar que exista la columna timestamp; si no, usamos el índice por seguridad
+            if "timestamp" in self.data.columns:
+                eje_x = self.data["timestamp"]
+            else:
+                eje_x = self.data.index
+
+            norm_tag = ""
+            if "normalize" in self.variables:
+                norm_tag = " (normalizada)" if self.variables["normalize"] else " (cruda)"
+
+            n_signals = len(self.result.columns)
+            row_heights = [0.35] + [0.65 / n_signals] * n_signals
+
+            fig = make_subplots(
+                rows=1 + n_signals, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.04,
+                row_heights=row_heights,
+                subplot_titles=["Close"] + list(self.result.columns),
+            )
+
+            # Subplot 1: precio close
+            fig.add_trace(go.Scatter(
+                x=eje_x, y=self.data["close"],
+                mode="lines", name="Close",
+                line=dict(color="#2C7BB6", width=1.2),
+                showlegend=False,
+            ), row=1, col=1)
+
+            # Subplots siguientes: una señal por fila
+            colours = ["#5B8CFF", "#00A86B", "#FF6B35", "#9B59B6", "#E74C3C"]
+            for j, col in enumerate(self.result.columns, start=2):
+                fig.add_trace(go.Scatter(
+                    x=eje_x, y=self.result[col],
+                    mode="lines", name=col,
+                    line=dict(color=colours[(j - 2) % len(colours)], width=1.0),
+                    showlegend=False,
+                ), row=j, col=1)
+
+                # Línea de media como referencia de estacionariedad
+                mean_val = self.result[col].mean()
+                fig.add_hline(
+                    y=mean_val,
+                    line=dict(color="gray", width=1, dash="dot"),
+                    row=j, col=1,
+                )
+
+                fig.update_yaxes(title_text=col, row=j, col=1)
+
+            title_text = f"Close vs señal{norm_tag} — {self.name}"
+            fig.update_layout(
+                title=dict(text=title_text, font=dict(size=16), x=0.5, xanchor="center"),
+                template="plotly_white",
+                height=300 * (1 + n_signals),
+                hovermode="x unified",
+            )
+
+            fig.show()
 
 # ------------------------------------------------------------------
 # Trend Indicators

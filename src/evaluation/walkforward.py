@@ -2,7 +2,7 @@ import copy
 import numpy as np
 import pandas as pd
 
-from src.modelos.models import Model
+from src.models.models import Model
 from .thresholds import ThresholdEvaluator
 from .mcpt import MonteCarloPT
 
