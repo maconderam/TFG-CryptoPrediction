@@ -8,16 +8,22 @@ from src.models.models import Model
 from .thresholds import ThresholdEvaluator
 from .mcpt import MonteCarloPT
 
+from src.evaluation.indicator_registry import INDICATOR_REGISTRY as DEFAULT_INDICATOR_REGISTRY
 
-class OptunaWalkForward:
-    """Walk-forward donde la selección de features e hiperparámetros se
+
+class OptunaWalkForwardFixed:
+    """Walk-forward donde la selección de indicadores e hiperparámetros se
     re-optimiza de forma independiente en cada fold, usando solo el train
     de ese fold (sin ver nunca el test del fold, ni el de ningún otro).
 
-    A diferencia de ModelOptimizer (que busca una única combinación fija
-    de features/hiperparámetros para todo el periodo histórico), aquí cada
-    fold puede terminar usando un conjunto de features y unos hiperparámetros
-    distintos, adaptados a su propio régimen temporal.
+    A diferencia de una selección de features por índice de columna (donde
+    "rsi_14" y "rsi_20" serían dos variables independientes para Optuna),
+    aquí la búsqueda es jerárquica: para cada familia de indicadores del
+    registro, Optuna decide primero si la usa (True/False) y, si la usa,
+    elige los parámetros concretos de esa familia (p.ej. window del RSI).
+    Los indicadores se calculan dinámicamente en cada trial a partir de esa
+    combinación familia→parámetros, en vez de seleccionarse de un conjunto
+    de columnas precalculadas.
 
     Para evitar que Optuna vea el test real del fold durante la búsqueda,
     el train de cada fold se subdivide en:
@@ -29,21 +35,21 @@ class OptunaWalkForward:
     se reentrena con el train completo del fold y se evalúa, por fin, en
     el test real de ese fold.
 
-    Además del profit factor tras aplicar el threshold óptimo, se reporta
-    el error de predicción puro (MSE/RMSE) del modelo sobre train y test,
-    para poder diagnosticar overfitting también a nivel de regresión, con
-    independencia de la rentabilidad de la estrategia derivada.
-
     Args:
-        data: DataFrame completo con features, target y close.
+        data: DataFrame completo con OHLCV, target y close. Los indicadores
+            se calculan a partir de este DataFrame, no de columnas precalculadas.
         model_builder: Función que recibe un dict de hiperparámetros y
             devuelve una instancia de Model lista para entrenar (sin fit).
-        feature_pool: Lista de columnas candidatas a feature.
         target: Nombre de la columna objetivo.
-        k_features: Número fijo de features, o tupla (low, high) para que
-            Optuna decida también cuántas usar en cada trial.
-        param_space: Igual formato que en ModelOptimizer:
+        param_space: Espacio de hiperparámetros del modelo (no de los
+            indicadores). Mismo formato que antes:
             {nombre: (tipo, low, high[, step])} o {nombre: ("categorical", [...])}.
+        indicator_registry: dict {familia: {"cls": Indicator, "params": {nombre: [valores]}}}.
+            Por defecto usa DEFAULT_INDICATOR_REGISTRY con las 16 familias
+            del proyecto. Se puede pasar un subconjunto o una versión
+            personalizada para acotar el espacio de búsqueda.
+        min_families: número mínimo de familias que debe activar un trial
+            para considerarse válido (evita trials sin ninguna feature).
         train_window: Tamaño de la ventana de entrenamiento del walk-forward externo.
         test_window: Tamaño de la ventana de test del walk-forward externo.
         val_frac: Fracción del train de cada fold reservada como validación
@@ -56,8 +62,6 @@ class OptunaWalkForward:
         min_kept: min_kept pasado a ThresholdEvaluator.find_optimized_threshold.
         mcpt: Si True, ejecuta un MCPT en modo "signal" (sin reentrenar) sobre
             el modelo final ya elegido por Optuna en cada fold, una sola vez.
-            No se aplica dentro de los trials internos de Optuna por coste
-            computacional (sería entrenar miles de veces extra).
         n_mcpt: Número de permutaciones del MCPT si mcpt=True.
         seed: Semilla para reproducibilidad.
         verbose: Si True, imprime el progreso de cada fold y cada trial.
@@ -67,12 +71,13 @@ class OptunaWalkForward:
         self,
         data: pd.DataFrame,
         model_builder,
-        feature_pool: list,
         target: str,
-        k_features,
         param_space: dict,
         train_window: int,
         test_window: int,
+        indicator_registry: dict = None,
+        min_families: int = 1,
+        max_families: int = 5,
         val_frac: float = 0.20,
         inner_metric: str = "pf_high",
         n_trials_per_fold: int = 30,
@@ -84,12 +89,13 @@ class OptunaWalkForward:
         seed: int = 42,
         verbose: bool = True,
     ):
-        self.data         = data
-        self.model_builder = model_builder
-        self.feature_pool  = feature_pool
-        self.target        = target
-        self.k_features    = k_features
-        self.param_space   = param_space
+        self.data          = data
+        self.model_builder  = model_builder
+        self.target         = target
+        self.param_space    = param_space
+        self.indicator_registry = indicator_registry or DEFAULT_INDICATOR_REGISTRY
+        self.min_families   = min_families
+        self.max_families   = max_families
 
         self.train_window  = train_window
         self.test_window   = test_window
@@ -101,9 +107,9 @@ class OptunaWalkForward:
         self.n_trials_per_fold = n_trials_per_fold
         self.min_kept           = min_kept
         self.mcpt               = mcpt
-        self.n_mcpt             = n_mcpt
-        self.seed               = seed
-        self.verbose             = verbose
+        self.n_mcpt              = n_mcpt
+        self.seed                = seed
+        self.verbose              = verbose
 
         self.n      = len(data)
         self.splits = self._build_splits()
@@ -133,28 +139,84 @@ class OptunaWalkForward:
         return splits
 
     # ------------------------------------------------------------------
-    # Sugerencias de Optuna (features + hiperparámetros)
+    # Sugerencias jerárquicas de Optuna: familia -> parámetros
     # ------------------------------------------------------------------
 
-    def _suggest_features(self, trial: optuna.Trial) -> list:
-        """Selecciona features distintas del pool, igual que en ModelOptimizer."""
-        if isinstance(self.k_features, (tuple, list)):
-            low, high = self.k_features[0], self.k_features[1]
-            k = trial.suggest_int("k_features", low, high)
-        else:
-            k = self.k_features
+    def _suggest_family_params(self, trial: optuna.Trial) -> dict:
+        """Decide cuántas familias usar (dentro de [min_families, max_families])
+        y cuáles, y para cada una sugiere sus parámetros concretos.
 
-        available = list(self.feature_pool)
-        chosen = []
+        A diferencia de una selección independiente familia por familia
+        (donde el número de familias activas no está acotado y puede crecer
+        sin control), aquí primero se fija cuántas familias se van a usar
+        y luego se eligen sin repetición entre todas las disponibles. Esto
+        acota el tamaño del espacio de búsqueda y favorece que Optuna
+        converja a combinaciones más estables entre folds.
 
+        Returns:
+            dict {familia: {param: valor}} solo con las familias activadas
+            en este trial.
+        """
+        family_names = list(self.indicator_registry.keys())
+
+        low  = min(self.min_families, len(family_names))
+        high = min(self.max_families, len(family_names))
+        if low > high:
+            low = high
+
+        k = trial.suggest_int("n_families", low, high)
+
+        available = list(family_names)
+        selected = []
         for i in range(k):
-            idx = trial.suggest_int(f"feature_idx_{i}", 0, len(available) - 1)
-            chosen.append(available.pop(idx))
+            idx = trial.suggest_int(f"family_idx_{i}", 0, len(available) - 1)
+            selected.append(available.pop(idx))
+
+        chosen = {}
+        for family_name in selected:
+            spec = self.indicator_registry[family_name]
+            params = {}
+            for param_name, choices in spec["params"].items():
+                params[param_name] = trial.suggest_categorical(
+                    f"{family_name}_{param_name}", choices
+                )
+            chosen[family_name] = params
 
         return chosen
 
+    def _build_feature_frame(self, family_params: dict) -> pd.DataFrame:
+        """Construye el DataFrame de features a partir de una combinación
+        familia->parámetros ya decidida (sin volver a preguntar a Optuna).
+
+        Se usa tanto dentro de los trials (con family_params recién
+        sugeridos) como en el reentrenamiento final del fold (con los
+        family_params del mejor trial encontrado).
+
+        Args:
+            family_params: dict {familia: {param: valor}}.
+
+        Returns:
+            pd.DataFrame con todas las columnas generadas, indexado igual
+            que self.data. Si family_params está vacío, devuelve un
+            DataFrame vacío con el mismo índice.
+        """
+        if not family_params:
+            return pd.DataFrame(index=self.data.index)
+
+        frames = []
+        for family_name, params in family_params.items():
+            cls = self.indicator_registry[family_name]["cls"]
+            indicator = cls(self.data, **params)
+            frames.append(indicator.compute())
+
+        feat_df = pd.concat(frames, axis=1)
+        # Por si dos familias generasen columnas con el mismo nombre
+        feat_df = feat_df.loc[:, ~feat_df.columns.duplicated()]
+        return feat_df
+
     def _suggest_params(self, trial: optuna.Trial) -> dict:
-        """Construye el diccionario de hiperparámetros a partir de param_space."""
+        """Construye el diccionario de hiperparámetros del modelo a partir
+        de param_space (esto es independiente de los indicadores)."""
         params = {}
 
         for name, spec in self.param_space.items():
@@ -186,18 +248,59 @@ class OptunaWalkForward:
     # Optimización interna de un único fold
     # ------------------------------------------------------------------
 
-    def _inner_objective(self, trial: optuna.Trial, X_inner_train, y_inner_train,
-                          X_inner_val, te_inner) -> float:
-        """Entrena con inner_train y evalúa con inner_val. Nunca toca el test real."""
-        features = self._suggest_features(trial)
-        params   = self._suggest_params(trial)
+    def _inner_objective(self, trial: optuna.Trial, train_start: int, train_end: int,
+                          te_inner) -> float:
+        """Construye dinámicamente los indicadores del trial, entrena con
+        inner_train y evalúa con inner_val. Nunca toca el test real."""
+        family_params = self._suggest_family_params(trial)
+
+        if len(family_params) < self.min_families:
+            trial.set_user_attr("error", "insufficient_families")
+            return float("-inf")
+
+        params = self._suggest_params(trial)
+
+        feat_df = self._build_feature_frame(family_params)
+        features = feat_df.columns.tolist()
+
+        # Registramos family_params/features/params YA, antes de cualquier
+        # intento de entrenamiento. Así, si el trial falla más adelante
+        # (NaN, error del modelo, etc.), _optimize_fold sigue pudiendo
+        # recuperar qué combinación se intentó, en vez de quedarse con un
+        # family_params vacío que rompe la reconstrucción final en run().
+        trial.set_user_attr("family_params", family_params)
+        trial.set_user_attr("features", features)
+        trial.set_user_attr("params", params)
+
+        n_train = train_end - train_start
+        n_val   = int(n_train * self.val_frac)
+        inner_train_start = train_start
+        inner_train_end   = train_end - n_val
+        inner_val_start   = inner_train_end
+        inner_val_end     = train_end
+
+        X_inner_train = feat_df.iloc[inner_train_start:inner_train_end]
+        y_inner_train = self.data[self.target].iloc[inner_train_start:inner_train_end]
+        X_inner_val   = feat_df.iloc[inner_val_start:inner_val_end]
+
+        # Los indicadores con ventana grande (p.ej. atr_window=252) no
+        # tienen suficiente historia al principio de la serie y generan
+        # NaN en esas filas. sklearn no admite NaN en el fit, así que
+        # eliminamos las filas afectadas antes de entrenar/predecir.
+        X_inner_train, y_inner_train = self._drop_nan_rows(X_inner_train, y_inner_train)
+        X_inner_val = X_inner_val.dropna()
+
+        min_rows = max(10, self.min_kept // 4)
+        if len(X_inner_train) < min_rows or len(X_inner_val) < 5:
+            trial.set_user_attr("error", "insufficient_valid_rows_after_dropna")
+            return float("-inf")
 
         model = self.model_builder(params)
 
         try:
-            model.fit(X_inner_train[features], y_inner_train)
+            model.fit(X_inner_train, y_inner_train)
             y_pred_val = pd.Series(
-                model.predict(X_inner_val[features]),
+                model.predict(X_inner_val),
                 index=X_inner_val.index,
                 name="y_pred_inner_val"
             )
@@ -213,26 +316,28 @@ class OptunaWalkForward:
         if np.isinf(score) or np.isnan(score):
             score = float("-inf") if score != float("inf") else 1e6
 
-        trial.set_user_attr("features", features)
-        trial.set_user_attr("params", params)
-
         return score
 
-    def _optimize_fold(self, X_train, y_train, fold) -> dict:
+    @staticmethod
+    def _drop_nan_rows(X: pd.DataFrame, y: pd.Series):
+        """Elimina filas con NaN en X o en y, manteniendo X e y alineados."""
+        valid = X.notna().all(axis=1) & y.notna()
+        return X.loc[valid], y.loc[valid]
+
+    def _optimize_fold(self, train_start: int, train_end: int, fold: int) -> dict:
         """Lanza un mini-estudio de Optuna usando solo el train de un fold.
 
         Returns:
-            dict con "features" y "params" de la mejor combinación encontrada.
+            dict con "family_params", "features" y "params" de la mejor
+            combinación encontrada.
         """
-        n_train = len(X_train)
+        n_train = train_end - train_start
         n_val   = int(n_train * self.val_frac)
-
-        X_inner_train = X_train.iloc[: n_train - n_val]
-        y_inner_train = y_train.iloc[: n_train - n_val]
-        X_inner_val   = X_train.iloc[n_train - n_val :]
+        inner_val_start = train_end - n_val
+        inner_val_end   = train_end
 
         # ThresholdEvaluator interno: usa los returns del propio inner_val
-        inner_data = self.data.loc[X_inner_val.index]
+        inner_data = self.data.iloc[inner_val_start:inner_val_end]
         te_inner = ThresholdEvaluator(
             np.log(inner_data["close"].shift(-1) / inner_data["close"])
         )
@@ -241,18 +346,17 @@ class OptunaWalkForward:
         study = optuna.create_study(direction="maximize", sampler=sampler)
 
         study.optimize(
-            lambda trial: self._inner_objective(
-                trial, X_inner_train, y_inner_train, X_inner_val, te_inner
-            ),
+            lambda trial: self._inner_objective(trial, train_start, train_end, te_inner),
             n_trials=self.n_trials_per_fold,
             show_progress_bar=False,
         )
 
         best = study.best_trial
         return {
-            "features":    best.user_attrs.get("features"),
-            "params":      best.user_attrs.get("params"),
-            "inner_score": study.best_value,
+            "family_params": best.user_attrs.get("family_params", {}),
+            "features":      best.user_attrs.get("features", []),
+            "params":        best.user_attrs.get("params", {}),
+            "inner_score":   study.best_value,
         }
 
     # ------------------------------------------------------------------
@@ -263,13 +367,11 @@ class OptunaWalkForward:
         """Ejecuta el walk-forward completo, re-optimizando en cada fold.
 
         Returns:
-            Lista de dicts (uno por fold) con: features y parámetros
-            elegidos para ese fold, error de predicción (MSE/RMSE) en
-            train/test, y las métricas habituales de profit factor en
-            train/test.
+            Lista de dicts (uno por fold) con: familia/parámetros de
+            indicadores y del modelo elegidos, error de predicción
+            (MSE/RMSE) en train/test, y las métricas habituales de profit
+            factor en train/test.
         """
-        X = self.data[self.feature_pool]
-        y = self.data[self.target]
         returns = np.log(self.data["close"].shift(-1) / self.data["close"])
         te = ThresholdEvaluator(returns)
 
@@ -277,25 +379,53 @@ class OptunaWalkForward:
 
         for fold, (train_start, train_end, test_start, test_end) in enumerate(self.splits):
 
-            X_train = X.iloc[train_start:train_end]
-            y_train = y.iloc[train_start:train_end]
-            X_test  = X.iloc[test_start:test_end]
-            y_test  = y.iloc[test_start:test_end]
-
             if self.verbose:
                 print(f"[Fold {fold}] optimizando con Optuna sobre train interno...")
 
-            best = self._optimize_fold(X_train, y_train, fold)
-            features = best["features"]
-            params   = best["params"]
+            best = self._optimize_fold(train_start, train_end, fold)
+            family_params = best["family_params"]
+            features      = best["features"]
+            params        = best["params"]
+
+            # Reconstruye las features del fold completo (train + test) a
+            # partir de la combinación familia->parámetros ganadora, sin
+            # volver a preguntar a Optuna (ya está decidida).
+            feat_df = self._build_feature_frame(family_params)
+
+            if feat_df.shape[1] == 0:
+                raise RuntimeError(
+                    f"[Fold {fold}] Ningún trial de Optuna produjo una combinación "
+                    f"válida de indicadores (todos los trials fallaron o quedaron en "
+                    f"-inf). Revisa el log de errores por trial (trial.user_attrs['error']) "
+                    f"o baja min_kept / min_families."
+                )
+
+            X_train = feat_df.iloc[train_start:train_end]
+            y_train = self.data[self.target].iloc[train_start:train_end]
+            X_test  = feat_df.iloc[test_start:test_end]
+            y_test  = self.data[self.target].iloc[test_start:test_end]
+
+            # Igual que en el objetivo interno: eliminamos filas con NaN
+            # (por historia insuficiente al principio de la serie) antes
+            # de entrenar y predecir.
+            X_train, y_train = self._drop_nan_rows(X_train, y_train)
+            valid_test = X_test.notna().all(axis=1) & y_test.notna()
+            X_test, y_test = X_test.loc[valid_test], y_test.loc[valid_test]
+
+            if len(X_train) == 0 or len(X_test) == 0:
+                raise RuntimeError(
+                    f"[Fold {fold}] No quedan filas válidas (sin NaN) en train o test "
+                    f"tras eliminar NaN. Revisa que train_window sea mayor que la "
+                    f"ventana máxima de los indicadores del registro."
+                )
 
             # Reentrena con el TRAIN COMPLETO del fold (inner_train + inner_val)
             # usando la mejor combinación encontrada, y evalúa en el test real.
             model = self.model_builder(params)
-            model.fit(X_train[features], y_train)
+            model.fit(X_train, y_train)
 
             y_pred_train = pd.Series(
-                model.predict(X_train[features]),
+                model.predict(X_train),
                 index=X_train.index,
                 name="y_pred_train"
             )
@@ -303,7 +433,7 @@ class OptunaWalkForward:
             opt = te.find_optimized_threshold(min_kept=self.min_kept)
 
             y_pred_test = pd.Series(
-                model.predict(X_test[features]),
+                model.predict(X_test),
                 index=X_test.index,
                 name="y_pred_test"
             )
@@ -328,7 +458,7 @@ class OptunaWalkForward:
             p_value_low  = None
             if self.mcpt:
                 _mc = MonteCarloPT(
-                    self.data.iloc[test_start:test_end].reset_index(drop=True),   # test, no train
+                    self.data.loc[X_test.index].reset_index(drop=True),   # test filtrado, no train
                     seed=self.seed
                 )
                 pred_fold = y_pred_test.reset_index(drop=True).rename(y_pred_test.name)
@@ -347,6 +477,7 @@ class OptunaWalkForward:
                 "train_end":           train_end,
                 "test_start":          test_start,
                 "test_end":            test_end,
+                "family_params":       family_params,
                 "features":            features,
                 "params":              params,
                 "inner_score":         best["inner_score"],
@@ -375,8 +506,9 @@ class OptunaWalkForward:
 
             if self.verbose:
                 p_str = f" p_hi={p_value_high:.3f}" if self.mcpt else ""
+                families_str = ", ".join(family_params.keys()) if family_params else "(ninguna)"
                 print(
-                    f"[Fold {fold}] features={len(features)} "
+                    f"[Fold {fold}] familias={families_str} "
                     f"inner_score={best['inner_score']:.3f} "
                     f"RMSE test={rmse_test:.5f} "
                     f"PF test long above={eval_high['pf_long_above']:.3f}{p_str}"
@@ -387,7 +519,7 @@ class OptunaWalkForward:
 
     def summary(self):
         """Imprime un resumen agregado, el error de predicción medio y la
-        evolución de features por fold."""
+        evolución de familias de indicadores por fold."""
         if self.fold_results is None:
             raise RuntimeError("Llama a run() primero.")
 
@@ -423,7 +555,9 @@ class OptunaWalkForward:
             print(f"  P-value low medio:         {safe_mean('p_value_low'):.4f}")
             print(f"  Folds p_value_high < 0.05: {(df['p_value_high'] < 0.05).sum()} / {len(df)}")
         print()
-        print("--- Features elegidas por fold ---")
+        print("--- Familias e indicadores elegidos por fold ---")
         for _, row in df.iterrows():
-            print(f"  Fold {row['fold']}: {row['features']}")
+            fams = list(row["family_params"].keys()) if row["family_params"] else []
+            print(f"  Fold {row['fold']}: familias={fams}")
+            print(f"    features={row['features']}")
         print("=" * 60)

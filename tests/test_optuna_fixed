@@ -1,0 +1,139 @@
+import sys
+from pathlib import Path
+ 
+# Añade la raíz del proyecto al sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+ 
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import Lasso
+from sklearn.ensemble import RandomForestRegressor
+ 
+from src.models.models import SklearnModel
+# Renombra la clase al importar: el archivo sigue llamándose
+# optuna_walkforward.py pero la clase interna es OptunaWalkForwardFixed
+from src.evaluation.optuna_walkforward_fixed import OptunaWalkForwardFixed
+from src.evaluation.visualizer_walkforward import VisualizerWalkForward
+ 
+# ------------------------------------------------------------------
+# 1. Carga de datos
+#
+# IMPORTANTE: ya NO hace falta un CSV con cientos de columnas de
+# indicadores precalculados. Con OptunaWalkForwardFixed, los indicadores
+# se calculan dinámicamente en cada trial a partir de las columnas OHLCV
+# crudas. Basta con que df tenga: timestamp/open/high/low/close/volume
+# más la columna target ya construida (p.ej. con NormalizedFutureReturn).
+# ------------------------------------------------------------------
+path = "data/processed/BTCUSDT_1d_01-01-2016_18-01-2026.csv"
+df = pd.read_csv(path, index_col=0)
+ 
+# Si el CSV todavía trae columnas de indicadores precalculados de una
+# corrida anterior, no pasa nada: OptunaWalkForwardFixed simplemente
+# las ignora y recalcula los indicadores que necesite desde OHLCV.
+# Solo asegúrate de que el target y el OHLCV no tengan NaN.
+target = "nfr_1_atr_14"
+df = df.dropna(subset=["open", "high", "low", "close", "volume", target])
+ 
+# ------------------------------------------------------------------
+# 2. Constructor del modelo: recibe los hiperparámetros del trial
+#    y devuelve una instancia de Model lista para entrenar.
+# ------------------------------------------------------------------
+def build_lasso(params: dict) -> SklearnModel:
+    model = Lasso(**params, random_state=42, max_iter=5000)
+    return SklearnModel(model, name="Lasso")
+ 
+ 
+def build_random_forest(params: dict) -> SklearnModel:
+    model = RandomForestRegressor(
+        **params,
+        random_state=42,
+        n_jobs=-1
+    )
+    return SklearnModel(model, name="Random Forest")
+ 
+ 
+param_space_lasso = {"alpha": ("loguniform", 1e-4, 1.0)}
+param_space_random_forest = {
+    "n_estimators": ("int", 50, 300, 10),
+    "max_depth": ("int", 2, 10),
+    "min_samples_leaf": ("int", 1, 20),
+}
+param_space_gradient_boosting = {
+    "n_estimators": ("int", 50, 300, 10),
+    "max_depth": ("int", 2, 6),
+    "learning_rate": ("loguniform", 1e-3, 0.3),
+}
+ 
+# ------------------------------------------------------------------
+# 3. (Opcional) Acotar el registro de indicadores
+#
+# Por defecto, OptunaWalkForwardFixed usa DEFAULT_INDICATOR_REGISTRY con
+# las 16 familias del proyecto. Si quieres restringir la búsqueda a un
+# subconjunto (por ejemplo, para una corrida más rápida o un experimento
+# específico), pasa tu propio indicator_registry con el mismo formato:
+#
+# from src.evaluation.optuna_walkforward import DEFAULT_INDICATOR_REGISTRY
+# mi_registro = {
+#     k: v for k, v in DEFAULT_INDICATOR_REGISTRY.items()
+#     if k in ["rsi", "macd", "adx", "cmma"]
+# }
+#
+# Si no se pasa nada, se usan las 16 familias completas.
+ 
+# ------------------------------------------------------------------
+# 4. Configuración del optimizador
+#
+# Ya NO se pasa feature_pool ni k_features: Optuna decide, familia por
+# familia, si la usa (True/False) y con qué parámetros, dentro de cada
+# trial. min_families=2 evita trials que no activen ninguna familia
+# (features vacías).
+# ------------------------------------------------------------------
+owf = OptunaWalkForwardFixed(
+    data=df,
+    model_builder=build_lasso,
+    target=target,
+    param_space=param_space_lasso,
+    train_window=730,
+    test_window=180,
+    min_families=3,
+    max_families=20,
+    min_kept=73,
+    n_trials_per_fold=50,
+    mcpt=True,
+    n_mcpt=200,
+)
+ 
+fold_results = owf.run()
+owf.summary()
+ 
+viz = VisualizerWalkForward(df, fold_results, indicator_registry = owf.indicator_registry)
+fig1 = viz.plot()
+fig1.show()
+ 
+fig2 = viz.plot_walkforward_metrics()
+fig2.show()
+ 
+fig3 = viz.plot_pf_evolution()
+fig3.show()
+ 
+fig4 = viz.plot_error_metrics()
+fig4.show()
+ 
+# ------------------------------------------------------------------
+# 5. Ejemplo con Random Forest, usando el mismo esquema
+# ------------------------------------------------------------------
+# owf_rf = OptunaWalkForwardFixed(
+#     data=df,
+#     model_builder=build_random_forest,
+#     target=target,
+#     param_space=param_space_random_forest,
+#     train_window=500,
+#     test_window=150,
+#     min_families=2,
+#     min_kept=50,
+#     n_trials_per_fold=30,
+#     mcpt=True,
+#     n_mcpt=200,
+# )
+# fold_results_rf = owf_rf.run()
+# owf_rf.summary()

@@ -18,10 +18,11 @@ class VisualizerWalkForward:
                   "features", como en OptunaWalkForward).
     """
     def __init__(self, data: pd.DataFrame, fold_results: list, signal: pd.Series = None,
-                 time_col: str = "timestamp"):
+                 time_col: str = "timestamp", indicator_registry: dict = None):
         self.data         = data
         self.fold_results = fold_results
         self.time_col     = time_col if time_col in data.columns else None
+        self.indicator_registry = indicator_registry
 
         self.returns = np.log(self.data["close"].shift(-1) / self.data["close"])
 
@@ -34,12 +35,43 @@ class VisualizerWalkForward:
         self.signal = signal
         self._signal_series, self._equity_curve = self._build_signals_and_equity()
 
+    def _build_feature_frame_for_fold(self, family_params: dict) -> pd.DataFrame:
+        """Reconstruye el DataFrame de features de un fold a partir de su
+        combinación familia->parámetros, calculando los indicadores sobre
+        self.data (igual que hace OptunaWalkForwardFixed internamente).
+
+        Requiere que se haya pasado indicator_registry al constructor.
+        """
+        if not family_params:
+            return pd.DataFrame(index=self.data.index)
+
+        frames = []
+        for family_name, params in family_params.items():
+            cls = self.indicator_registry[family_name]["cls"]
+            indicator = cls(self.data, **params)
+            frames.append(indicator.compute())
+
+        feat_df = pd.concat(frames, axis=1)
+        feat_df = feat_df.loc[:, ~feat_df.columns.duplicated()]
+        return feat_df
+
     def _reconstruct_signal_from_folds(self) -> pd.Series:
         """Reconstruye una señal continua concatenando predicciones por fold.
 
         Cada fold puede tener un modelo y un conjunto de features distinto
-        (como ocurre en OptunaWalkForward). Predice sobre el test de cada
-        fold usando su propio modelo, y concatena todo en orden temporal.
+        (como ocurre en OptunaWalkForward/OptunaWalkForwardFixed). Predice
+        sobre el test de cada fold usando su propio modelo, y concatena
+        todo en orden temporal.
+
+        Si el fold_result trae "family_params" (OptunaWalkForwardFixed,
+        features calculadas dinámicamente) y se pasó indicator_registry al
+        constructor, las features se recalculan aquí sobre self.data en
+        vez de buscarse como columnas ya existentes — así no hace falta
+        que el df tenga precalculadas todas las combinaciones posibles.
+
+        Si el fold_result no trae "family_params" (versión anterior por
+        columnas), se mantiene el comportamiento original: busca las
+        columnas de "features" directamente en self.data.
         """
         parts = []
 
@@ -55,7 +87,23 @@ class VisualizerWalkForward:
             test_start = r["test_start"]
             test_end   = r["test_end"]
 
-            X_test = self.data[r["features"]].iloc[test_start:test_end]
+            has_family_params = bool(r.get("family_params"))
+
+            if has_family_params and self.indicator_registry is not None:
+                feat_df_full = self._build_feature_frame_for_fold(r["family_params"])
+                X_test = feat_df_full[r["features"]].iloc[test_start:test_end]
+            elif has_family_params and self.indicator_registry is None:
+                raise ValueError(
+                    "Este fold_result viene de OptunaWalkForwardFixed (usa "
+                    "'family_params'), pero no se pasó indicator_registry al "
+                    "construir VisualizerWalkForward. Pasa "
+                    "indicator_registry=DEFAULT_INDICATOR_REGISTRY (o el registro "
+                    "que hayas usado) para poder recalcular las features."
+                )
+            else:
+                # Comportamiento original: columnas ya precalculadas en self.data
+                X_test = self.data[r["features"]].iloc[test_start:test_end]
+
             y_pred = pd.Series(
                 r["model"].predict(X_test),
                 index=X_test.index,
@@ -103,13 +151,22 @@ class VisualizerWalkForward:
 
         combined      = pd.concat(parts).sort_index()
         signal_series = combined["signal"]
-        equity_curve  = combined["strategy_returns"].cumsum().rename("equity_curve")
-
+        log_cum       = combined["strategy_returns"].cumsum()
+        equity_curve  = np.exp(log_cum).rename("equity_curve") 
+        
         return signal_series, equity_curve
 
     @property
     def has_mcpt(self) -> bool:
         return len(self.fold_results) > 0 and "p_value_high" in self.fold_results[0]
+
+    @property
+    def has_error_metrics(self) -> bool:
+        """True si cada fold trae MSE/RMSE de train y test (OptunaWalkForward)."""
+        return (
+            len(self.fold_results) > 0
+            and all(k in self.fold_results[0] for k in ("mse_train", "mse_test"))
+        )
 
     # ------------------------------------------------------------------
     # Plot principal
@@ -310,6 +367,120 @@ class VisualizerWalkForward:
         fig.update_xaxes(title_text="Fold", row=2, col=1)
         fig.update_yaxes(title_text="Valor threshold", row=1, col=1)
         fig.update_yaxes(title_text="Profit Factor",   row=2, col=1)
+
+        return fig
+
+    # ------------------------------------------------------------------
+    # Plot métricas de error (MSE / RMSE train vs test)
+    # ------------------------------------------------------------------
+
+    def plot_error_metrics(self) -> go.Figure:
+        """Muestra el error de predicción (MSE y RMSE) de train vs test por fold.
+
+        Requiere que cada fold_result tenga las claves "mse_train",
+        "mse_test", "rmse_train", "rmse_test" (p.ej. desde OptunaWalkForward
+        con el cálculo de error añadido en run()).
+
+        Si además existen "mse_baseline_train"/"mse_baseline_test" (error de
+        predecir siempre la media del target de train), se dibujan como
+        líneas de referencia para poder comparar el modelo contra un
+        baseline trivial.
+
+        Returns:
+            Figura de Plotly con 2 paneles: MSE por fold y RMSE por fold,
+            cada uno con la curva de train y de test superpuestas.
+        """
+        if not self.has_error_metrics:
+            raise RuntimeError(
+                "fold_results no contiene 'mse_train'/'mse_test' por fold. "
+                "Este gráfico requiere que OptunaWalkForward.run() calcule "
+                "el MSE/RMSE de train y test en cada fold."
+            )
+
+        df_m  = pd.DataFrame(self.fold_results)
+        folds = df_m["fold"]
+
+        has_baseline = all(
+            c in df_m.columns for c in ("mse_baseline_train", "mse_baseline_test")
+        )
+
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.1,
+            subplot_titles=("MSE por fold (train vs test)", "RMSE por fold (train vs test)")
+        )
+
+        # --- Panel 1: MSE ---
+        fig.add_trace(go.Scatter(
+            x=folds, y=df_m["mse_train"],
+            mode="lines+markers", name="MSE train",
+            line=dict(color="#5B8CFF", dash="dot")
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=folds, y=df_m["mse_test"],
+            mode="lines+markers", name="MSE test",
+            line=dict(color="#FF4C6A")
+        ), row=1, col=1)
+
+        if has_baseline:
+            fig.add_trace(go.Scatter(
+                x=folds, y=df_m["mse_baseline_test"],
+                mode="lines", name="MSE baseline (media) test",
+                line=dict(color="#999999", dash="dash")
+            ), row=1, col=1)
+
+        # --- Panel 2: RMSE ---
+        fig.add_trace(go.Scatter(
+            x=folds, y=df_m["rmse_train"],
+            mode="lines+markers", name="RMSE train",
+            line=dict(color="#5B8CFF", dash="dot"),
+            showlegend=False,
+        ), row=2, col=1)
+        fig.add_trace(go.Scatter(
+            x=folds, y=df_m["rmse_test"],
+            mode="lines+markers", name="RMSE test",
+            line=dict(color="#FF4C6A"),
+            showlegend=False,
+        ), row=2, col=1)
+
+        if has_baseline and "rmse_baseline_test" in df_m.columns:
+            fig.add_trace(go.Scatter(
+                x=folds, y=df_m["rmse_baseline_test"],
+                mode="lines", name="RMSE baseline (media) test",
+                line=dict(color="#999999", dash="dash"),
+                showlegend=False,
+            ), row=2, col=1)
+
+        # --- Anotación resumen: brecha media train/test ---
+        gap_mse  = (df_m["mse_test"]  - df_m["mse_train"]).mean()
+        gap_rmse = (df_m["rmse_test"] - df_m["rmse_train"]).mean()
+        summary_text = (
+            f"Brecha media MSE (test - train): {gap_mse:+.5f}   |   "
+            f"Brecha media RMSE (test - train): {gap_rmse:+.5f}"
+        )
+
+        fig.update_layout(
+            title=f"Error de predicción (MSE / RMSE) — {self.signal_name}",
+            template="plotly_white",
+            height=600,
+            hovermode="x unified",
+            legend=dict(orientation="h", y=-0.12),
+            annotations=list(fig.layout.annotations) + [
+                dict(
+                    text=summary_text,
+                    xref="paper", yref="paper",
+                    x=0.5, y=-0.2,
+                    showarrow=False,
+                    font=dict(size=12, color="#444444"),
+                    align="center",
+                )
+            ]
+        )
+
+        fig.update_xaxes(title_text="Fold", row=2, col=1)
+        fig.update_yaxes(title_text="MSE",  row=1, col=1)
+        fig.update_yaxes(title_text="RMSE", row=2, col=1)
 
         return fig
 

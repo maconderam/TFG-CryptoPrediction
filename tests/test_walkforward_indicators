@@ -1,0 +1,49 @@
+import sys
+from pathlib import Path
+
+# Añade la raíz del proyecto al sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+import numpy as np
+import pandas as pd
+ 
+from src.eda.eda import prepare_data
+from src.evaluation.visualizer_walkforward import VisualizerWalkForward
+from src.evaluation.walkforward import WalkForwardEvaluator
+ 
+# ------------------------------------------------------------------
+# 1. Carga y limpieza
+# ------------------------------------------------------------------
+df = pd.read_csv("data/processed/BTCUSDT_1d_01-01-2016_18-01-2026.csv")
+df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+df = df.dropna()
+ultima_fecha = df["timestamp"].max()
+fecha_corte = ultima_fecha - pd.DateOffset(years=3)
+
+df_train = df[df["timestamp"] < fecha_corte].copy()
+df_test = df[df["timestamp"] >= fecha_corte].copy()
+ 
+# ------------------------------------------------------------------
+# 2. Walk-forward
+# ------------------------------------------------------------------
+
+wf = WalkForwardEvaluator(df, train_window=500, test_window=100)
+
+# Para modelos
+fold_results = wf.run_indicator(
+    signal=df["rsi_7_3"],
+    mcpt = True,
+    n_mcpt=50,
+    min_kept=300
+)
+
+viz = VisualizerWalkForward(df, fold_results, signal=df["rsi_7_3"])
+fig1 = viz.plot()
+fig1.show()
+
+fig2 = viz.plot_walkforward_metrics()
+fig2.show()
+
+fig = viz.plot_mcpt_metrics()
+fig.show()

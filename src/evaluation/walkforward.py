@@ -228,10 +228,21 @@ class WalkForwardEvaluator:
                   f"PF tr.hi: {opt['pf_high']:.3f} | "
                   f"PF tr.lo: {opt['pf_low']:.3f} | "
                   f"L.abv: {eval_high['pf_long_above']:.3f} | "
-                  f"L.blw: {eval_low['pf_long_below']:.3f}"
-                  + (f" | p_hi: {p_value_high:.3f} | p_lo: {p_value_low:.3f}" if mcpt else ""))
+                  f"L.blw: {eval_low['pf_long_below']:.3f} | "
+                  f"S.abv: {eval_high['pf_short_above']:.3f} | "
+                  f"S.blw: {eval_low['pf_short_below']:.3f} | "
+                  + (f"p_hi: {p_value_high:.3f} | p_lo: {p_value_low:.3f}" if mcpt else ""))
 
         fold_results = self._add_composite_score(fold_results)
+        if fold_results:
+            df_res = pd.DataFrame(fold_results)
+            cols = ["pf_train_high", "pf_train_low", "pf_test_long_above", "pf_test_long_below", "pf_test_short_above", "pf_test_short_below"]
+            lbls = ["tr.hi", "tr.lo", "L.abv", "L.blw", "S.abv", "S.blw"]
+            
+            p_str = f"p_hi: {df_res['p_value_high'].mean():.3f} | p_lo: {df_res['p_value_low'].mean():.3f}" if mcpt else ""
+            m_str = " | ".join(f"{lbl}: {df_res[col].mean():.3f}" for lbl, col in zip(lbls, cols))
+
+            print("-" * 115 + f"\nPROMEDIO| {m_str} | {p_str}\n" + "-" * 115)
 
         self.fold_results        = fold_results
         self.fold_results_source = "indicator"

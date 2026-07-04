@@ -1,9 +1,14 @@
+import sys
+from pathlib import Path
+
+# Añade la raíz del proyecto al sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
  
 from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
  
 from src.models.models import SklearnModel
@@ -11,13 +16,11 @@ from src.eda.eda import prepare_data
 from src.evaluation.visualizer_walkforward import VisualizerWalkForward
 from src.evaluation.walkforward import WalkForwardEvaluator
 from src.evaluation.feature_analyzer import FeatureAnalyzer
-from src.features.indicators import RSI, Stochastic, StochasticRSI, MACD, PriceIntensity
-from src.features.targets import NormalizedFutureReturn  
  
 # ------------------------------------------------------------------
 # 1. Carga y limpieza
 # ------------------------------------------------------------------
-df = pd.read_csv("datos/procesados/BTCUSDT_1d_01-01-2016_18-01-2026.csv")
+df = pd.read_csv("data/processed/BTCUSDT_1d_01-01-2016_18-01-2026.csv")
 df["timestamp"] = pd.to_datetime(df["timestamp"])
 
 df = df.dropna()
