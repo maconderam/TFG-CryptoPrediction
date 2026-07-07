@@ -282,6 +282,7 @@ class OptunaWalkForwardFixed:
         X_inner_train = feat_df.iloc[inner_train_start:inner_train_end]
         y_inner_train = self.data[self.target].iloc[inner_train_start:inner_train_end]
         X_inner_val   = feat_df.iloc[inner_val_start:inner_val_end]
+        y_inner_val   = self.data[self.target].iloc[inner_val_start:inner_val_end]
 
         # Los indicadores con ventana grande (p.ej. atr_window=252) no
         # tienen suficiente historia al principio de la serie y generan
@@ -307,11 +308,13 @@ class OptunaWalkForwardFixed:
 
             te_inner.prepare(y_pred_val)
             opt = te_inner.find_optimized_threshold(min_kept=max(1, self.min_kept // 4))
+            mse_val  = float(np.mean((y_inner_val.values - y_pred_val.values) ** 2))
 
         except Exception as e:
             trial.set_user_attr("error", str(e))
             return float("-inf")
 
+        # Si optimizaramos por PF utilizariamos score
         score = opt.get(self.inner_metric, float("-inf"))
         if np.isinf(score) or np.isnan(score):
             score = float("-inf") if score != float("inf") else 1e6

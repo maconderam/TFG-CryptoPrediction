@@ -4,10 +4,14 @@ from pathlib import Path
 # Añade la raíz del proyecto al sys.path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
  
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+warnings.filterwarnings("ignore", category=ResourceWarning)
+
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Lasso
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
  
 from src.models.models import SklearnModel
 # Renombra la clase al importar: el archivo sigue llamándose
@@ -24,7 +28,7 @@ from src.evaluation.visualizer_walkforward import VisualizerWalkForward
 # crudas. Basta con que df tenga: timestamp/open/high/low/close/volume
 # más la columna target ya construida (p.ej. con NormalizedFutureReturn).
 # ------------------------------------------------------------------
-path = "data/processed/BTCUSDT_1d_01-01-2016_18-01-2026.csv"
+path = "data/processed/ETHUSDT_4h_01-01-2016_18-01-2026.csv"
 df = pd.read_csv(path, index_col=0)
  
 # Si el CSV todavía trae columnas de indicadores precalculados de una
@@ -50,6 +54,13 @@ def build_random_forest(params: dict) -> SklearnModel:
         n_jobs=-1
     )
     return SklearnModel(model, name="Random Forest")
+
+def build_gradient_boosting(params: dict) -> SklearnModel:
+    model = GradientBoostingRegressor(
+        **params,
+        random_state=42
+    )
+    return SklearnModel(model, name="Gradient Boosting")
  
  
 param_space_lasso = {"alpha": ("loguniform", 1e-4, 1.0)}
@@ -80,25 +91,18 @@ param_space_gradient_boosting = {
 #
 # Si no se pasa nada, se usan las 16 familias completas.
  
-# ------------------------------------------------------------------
-# 4. Configuración del optimizador
-#
-# Ya NO se pasa feature_pool ni k_features: Optuna decide, familia por
-# familia, si la usa (True/False) y con qué parámetros, dentro de cada
-# trial. min_families=2 evita trials que no activen ninguna familia
-# (features vacías).
-# ------------------------------------------------------------------
 owf = OptunaWalkForwardFixed(
     data=df,
     model_builder=build_lasso,
     target=target,
     param_space=param_space_lasso,
-    train_window=730,
-    test_window=180,
+    train_window=4380,
+    test_window=1080,
     min_families=3,
-    max_families=20,
-    min_kept=73,
-    n_trials_per_fold=50,
+    max_families=5,
+    expanding=False,
+    min_kept=43,
+    n_trials_per_fold=30,
     mcpt=True,
     n_mcpt=200,
 )
@@ -118,22 +122,3 @@ fig3.show()
  
 fig4 = viz.plot_error_metrics()
 fig4.show()
- 
-# ------------------------------------------------------------------
-# 5. Ejemplo con Random Forest, usando el mismo esquema
-# ------------------------------------------------------------------
-# owf_rf = OptunaWalkForwardFixed(
-#     data=df,
-#     model_builder=build_random_forest,
-#     target=target,
-#     param_space=param_space_random_forest,
-#     train_window=500,
-#     test_window=150,
-#     min_families=2,
-#     min_kept=50,
-#     n_trials_per_fold=30,
-#     mcpt=True,
-#     n_mcpt=200,
-# )
-# fold_results_rf = owf_rf.run()
-# owf_rf.summary()
