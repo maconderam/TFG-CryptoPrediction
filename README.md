@@ -59,8 +59,6 @@ pip install -r requirements.txt
 - **Linux (Ubuntu/Debian):** `sudo apt-get install ta-lib` o compila desde el código fuente oficial antes de `pip install TA-Lib`.
 - **macOS:** `brew install ta-lib` antes de `pip install TA-Lib`.
 
-Ver la sección [Revisión de requirements.txt](#revisión-de-requirementstxt) más abajo para más detalles.
-
 ## 1. Preparar los datos
 
 Todos los experimentos parten de un CSV OHLCV crudo (`timestamp, open, high, low, close, volume`) descargado de Binance, guardado en `data/raw/<resolución>/`. No hace falta precalcular ningún indicador a mano — con `OptunaWalkForwardFixed` se generan dinámicamente.
